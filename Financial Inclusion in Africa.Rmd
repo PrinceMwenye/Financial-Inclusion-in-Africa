@@ -1,0 +1,275 @@
+---
+title: "Finance Data"
+author: "forecast"
+date: "4/9/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+```{r}
+library(dplyr)
+library(stringr)
+library(ggplot2)
+fintrain <- read.csv('Train_v2.csv') 
+fintest <- read.csv('Test_v2.csv')
+fintest['bank_account'] <- NA #rbind only works with equal ncols() and same colnames()
+finfull <- rbind(fintrain,fintest) #fulldataset for manipulation if needed
+
+```
+
+
+```{r}
+finfull %>% ggplot(aes(x = log10( age_of_respondent))) + geom_bar()
+#right skew of age, need log transformation to make it symmetric or we can categorize them for our model
+
+groupages <- c(15,65,101)
+
+finfull['age_groups'] <- cut(finfull$age_of_respondent, 
+                             breaks = groupages, 
+                             labels = c('Adult', 'Senior')) #age now binned into ordinal category
+
+finfull$age_groups <- factor(finfull$age_groups, ordered = TRUE) 
+
+finfull <- finfull[-c(8)]
+
+#household size can be binned into small, medium, big, #kind of subjective but worth trying
+
+finfull['Household'] <- cut(finfull$household_size,4, 
+                            labels = c('S', 'M', 'L', 'XL'))
+
+finfull <- finfull[-c(7)]
+
+finfull$Household <- factor(finfull$Household, ordered = TRUE)
+
+finfull$uniqueid <- as.character(finfull$uniqueid)
+
+finfull$year <- factor(finfull$year, ordered = TRUE)
+#back to train/test
+
+finfull$relationship_with_head <- factor(finfull$relationship_with_head,
+                                         ordered = TRUE)
+
+finfull$education_level <- factor(finfull$education_level, 
+                                  ordered = TRUE)
+
+findata <- finfull[1:23524, ]
+fintest <- finfull[23525:33610, ]
+```
+
+
+```{r}
+
+#visualize country
+
+findata %>% group_by(country, bank_account) %>% 
+  summarise(n = n()) %>% 
+  mutate(freq = n/ sum(n)) %>% 
+  arrange() %>% 
+  filter(bank_account == 'No') 
+#Kenya has the least proportion of people without bank account
+
+findata %>% group_by(country, bank_account) %>% 
+  summarise(n = n()) %>% 
+  mutate(freq = n/ sum(n)) %>% arrange() %>% 
+  filter(bank_account == 'Yes')
+#Kenya has the biggest proportion of people with people with a bank account
+```
+
+
+```{r}
+
+# people with cellphone access have higher probability of opening a bank account?
+findata %>% ggplot(aes(x = cellphone_access, color = bank_account)) + 
+  geom_bar(fill = 'blue')
+
+#household size doesnt seem to have a difference! 
+findata %>% group_by(Household, bank_account) %>% 
+  summarise(total = n()) %>%
+  mutate(freq = total/ sum(total))
+
+
+```
+
+
+
+```{r eval=FALSE, include=FALSE}
+
+library(randomForest)
+
+#randomforest
+
+#optimum amount of trees
+classifier <- randomForest(x = findata[ c(1,2,5,6,7,8,9,10,11,12,13)], 
+                           y = findata$bank_account, 
+                           ntree = 1000)
+
+#importance high values means variable contributes more
+importance(classifier)
+
+assifier <- randomForest(x = findata[ c(1,5,6,8,9,10,11)], 
+                         y = findata$bank_account, 
+                         ntree = 100)
+importance(assifier)
+  
+fintest <- fintest[-c(4)]
+
+#pred <- predict(classifier,  newdata = fintest[-c(2,3)])
+
+fintest <- fintest %>% add_predictions(assifier)
+
+
+
+fintest <- fintest %>% select(uniqueid, country, pred)
+colnames(fintest) <- c('uniqueid', 'country', 'bank_account')
+fintest$uniqueid <- as.character(fintest$uniqueid)
+
+library(dplyr)
+library(tidyverse)
+
+fintest <- fintest %>% unite(uniqueid, uniqueid, country, sep = ' x ' )
+
+fintest$bank_account <- ifelse(fintest$bank_account == 'Yes',
+                               1, 
+                               0)
+
+write.csv(fintest, 'financial.csv', col.names = TRUE)
+```
+
+
+
+
+```{r eval=TRUE, include=TRUE}
+
+#XGBOOST
+library(xgboost)
+
+findata <- data.frame(findata)
+
+input <- data.matrix(findata[-c(3,4)]) #xgboost only works with a matrix
+
+findata$bank_account <- ifelse(findata$bank_account == 'Yes',
+                               1, 0)
+```
+
+```{r eval=FALSE, include=TRUE}
+classifier <- xgboost(data = input , 
+               label = findata$bank_account, 
+               nrounds = 81,
+               params = list(
+                 objective = 'binary:logistic',
+                 eta = 0.4,
+                 max_depth = 150,
+                 gamma = 0,
+                 colsample_bytree = 0.6,
+                 min_child_weight = 1,
+                 subsample = 1
+                 
+               ))
+               
+#25 rounds best submission
+```
+
+
+```{r eval=FALSE, include=TRUE  }
+
+
+
+
+test <- fintest
+
+
+test <- test[-c(3,4)]
+
+test <- data.frame(test)
+
+test <- data.matrix(test)
+
+
+
+y_pred <- predict(classifier, test)
+fintest['pred'] = y_pred
+
+fintest <- fintest[-c(4)]
+
+#pred <- predict(classifier,  newdata = fintest[-c(2,3)])
+fintest$pred <- ifelse(fintest$pred < 0.5,
+                       0, 
+                       1)
+
+```
+
+
+```{r eval=FALSE, warning=FALSE, include=TRUE}
+#Applying K-Fold validation:
+library(caret)
+
+folds = createFolds(findata$bank_account, k = 10)
+#folds list
+#applying function to list with lapply
+
+
+cv = lapply(folds, function(x) {
+  training_fold = input #training set of features
+  test_fold = input
+  classifier <- xgboost(data = training_fold, 
+               label = findata$bank_account, 
+               nrounds = 81,
+               params = list(
+                 objective = 'binary:logistic',
+                 eta = 0.4,
+                 max_depth = 150,
+                 gamma = 0,
+                 colsample_bytree = 0.6,
+                 min_child_weight = 1,
+                 subsample = 1
+                 
+                 
+                 
+            ))
+              
+y_pred2 = predict(classifier, newdata = input)
+y_pred2 = ifelse(y_pred2 < 0.5, 0, 1)
+  
+  #remember cross validation is done on the training-set
+  cm = table( c(y_pred2), findata$bank_account)
+  accuracy = (cm[1,1] + cm[2,2]) / (cm[1,1] + cm[2,2] + cm[1,2] + cm[2,1])
+  return(accuracy)
+
+})
+
+
+```
+
+```{r eval=FALSE, include=TRUE }
+
+accuracy = mean(as.numeric(cv))
+#average error
+error = 1 - accuracy 
+0.0932 #error rate
+
+library(caret)
+
+#gridsearch for best parameters
+#trialclass <- train(input,factor(findata$bank_account), 
+                  #  method = 'xgbTree', metric = 'Accuracy')
+
+#trialclass$bestTune
+#caret suggested parameters for optimal accuracy
+
+fintest <- fintest %>% select(uniqueid, country, pred)
+
+colnames(fintest) <- c('uniqueid', 'country', 'bank_account')
+
+fintest$uniqueid <- as.character(fintest$uniqueid)  
+
+library(dplyr)
+library(tidyr)
+fintest <- fintest %>% unite(uniqueid, uniqueid, country, sep = ' x ' )
+
+
+write.csv(fintest, 'financialinclusion.csv', col.names = TRUE, row.names = FALSE )
+```
