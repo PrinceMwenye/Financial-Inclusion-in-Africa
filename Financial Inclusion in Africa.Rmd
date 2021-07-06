@@ -26,7 +26,7 @@ finfull <- rbind(fintrain,fintest) #fulldataset for manipulation if needed
 finfull %>% ggplot(aes(x = log10( age_of_respondent))) + geom_bar()
 #right skew of age, need log transformation to make it symmetric or we can categorize them for our model
 
-groupages <- c(15,65,101)
+groupages <- c(15,65,101)   #we can classify age-groups to  adult (>15 & < 65) and then a senior (65+)
 
 finfull['age_groups'] <- cut(finfull$age_of_respondent, 
                              breaks = groupages, 
@@ -39,7 +39,7 @@ finfull <- finfull[-c(8)]
 #household size can be binned into small, medium, big, #kind of subjective but worth trying
 
 finfull['Household'] <- cut(finfull$household_size,4, 
-                            labels = c('S', 'M', 'L', 'XL'))
+                            labels = c('S', 'M', 'L', 'XL'))     #binning household size, some African families tend to have large families
 
 finfull <- finfull[-c(7)]
 
@@ -51,10 +51,10 @@ finfull$year <- factor(finfull$year, ordered = TRUE)
 #back to train/test
 
 finfull$relationship_with_head <- factor(finfull$relationship_with_head,
-                                         ordered = TRUE)
+                                         ordered = TRUE)                 #relationship can be important, for example, wife vs child of head
 
 finfull$education_level <- factor(finfull$education_level, 
-                                  ordered = TRUE)
+                                  ordered = TRUE)                 #ordered education level, for example, more weight to someone with degree than diploma
 
 findata <- finfull[1:23524, ]
 fintest <- finfull[23525:33610, ]
@@ -113,7 +113,11 @@ importance(classifier)
 assifier <- randomForest(x = findata[ c(1,5,6,8,9,10,11)], 
                          y = findata$bank_account, 
                          ntree = 100)
-importance(assifier)
+                         
+                         
+importance(assifier)        #you can remove varibales with the least predictive power
+  
+  
   
 fintest <- fintest[-c(4)]
 
